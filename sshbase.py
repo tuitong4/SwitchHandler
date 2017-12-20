@@ -536,7 +536,7 @@ class SSH(object):
 			return self.global_delay_factor
 			
 	def disable_paging(self, command="", delay_factor=1):
-		"""Disable paging default to a Cisco/Nexus CLI method."""
+		"""Disable paging for CLI method."""
 		delay_factor = self.select_delay_factor(delay_factor)
 		time.sleep(delay_factor * .1)
 		self.clear_buffer()
@@ -649,7 +649,8 @@ class SSH(object):
 		
 	def send_command(self, command_string, expect_string=None,
 					 delay_factor=1, timeout=None, auto_find_prompt=True,
-					 strip_prompt=True, strip_command=True, normalize=True):
+					 strip_prompt=True, strip_command=True, normalize=True,
+					 failure_pattern=None):
 		"""Execute command_string on the SSH channel using a pattern-based mechanism. Generally
 		used for show commands. By default this method will keep waiting to receive data until the
 		network device prompt is detected. The current network device prompt will be determined
@@ -738,12 +739,14 @@ class SSH(object):
 				time.sleep(delay_factor * loop_delay)
 			
 			if time.time() - start > timeout:
-				break
-				
-		else:   # nobreak
-			raise IOError("Search pattern never detected in send_command_expect: {}".format(
+				raise IOError("Search pattern never detected in send_command_expect: {}".format(
 				search_pattern))
+				break
 
+		#Checkout if the command is ran as expect.
+		if failure_pattern and re.search(failure_pattern, output):
+			raise SSHTimeoutException("Execute command %s failed." % repr(command_string))
+			
 		output = self._sanitize_output(output, strip_command=strip_command,
 									   command_string=command_string, strip_prompt=strip_prompt)
 		return output
@@ -818,8 +821,8 @@ class SSH(object):
 		:param output: Output from a remote network device
 		:type output: unicode string
 
-		:param strip_command:
-		:type strip_command:
+		:param strip_prompt: Remove the trailing router prompt from the output (default: False).
+		:type strip_prompt: bool
 		"""
 		output = self.normalize_linefeeds(output)
 		if strip_command and command_string:
@@ -843,12 +846,13 @@ class SSH(object):
 		pass
 		
 		
-	def send_batch_command(self, commands=None, delay_factor=1, timeout = None, command_interval = 1):
+	def send_batch_command(self, commands=None, delay_factor=1, timeout=None, command_interval=1,
+						   strip_prompt=False, checkout=False, failure_pattern=None):
 		"""
 		Send batch commands to remote device, then collect output.
 		
 		:param commands : a set of command to exceute on remote device
-		:tyep  commands : iterable type as list or tuple wthin str string command.
+		:type  commands : iterable type as list or tuple wthin str string command.
 		
 		:param delay_factor: Multiplying factor used to adjust delays (default: 1).
 		:type  delay_factor: int
@@ -856,7 +860,15 @@ class SSH(object):
 		:param command_interval: Interval of sending each command. For diffrent device, \
 								 the echo time of diffrent command is diffrent. 
 		:type  command_interval: int or float
+
+		:param strip_prompt: Remove the trailing router prompt from the output (default: False).
+		:type strip_prompt: bool
 		
+		:param checkout : Execute command in strcit mode, the echo of every command will checked if it is exactlly excecuted.
+		:type  checkout : bool
+		
+		:param failure_pattern : Pattern that to check the output of command   
+		:type  failure_pattern : str
 		"""
 		#Time to delay in each read loop
 		loop_delay = .2
@@ -874,22 +886,33 @@ class SSH(object):
 		elif isinstance(commands, str):
 			commands = (commands,)
 
-		if not isinstance(commands, (list, tuple)):
-			raise ValueError("Invalid argument passed into send_config_set")
+		if not hasattr(commands, '__iter__'):
+			raise ValueError("Invalid argument passed into commands")
 		
 		# Send command every command_interval
-		for cmd in commands:
-			self.write_channel(self.normalize_cmd(cmd))
-			time.sleep(command_interval)
-		
-		#Gather output
-		if timeout is None:
-			timeout = self.timeout
-		output = self._read_channel_timing(delay_factor=delay_factor, timeout=timeout)
-		
+		#
+		output = ''
+		if checkout :
+			for cmd in commands:
+				new_output = self.send_command(command_string=self.normalize_cmd(cmd),\
+											   timeout=timeout, failure_pattern=failure_pattern,\
+											   auto_find_prompt = False, strip_prompt=strip_prompt)
+				output += new_output
+					
+		else:		
+			for cmd in commands:
+				self.write_channel(self.normalize_cmd(cmd))
+				time.sleep(command_interval)
+			
+			#Gather output
+			if timeout is None:
+				timeout = self.timeout
+			output = self._read_channel_timing(delay_factor=delay_factor, timeout=timeout)
+			
 		output = self._sanitize_output(output)
 		
 		return output
+
 
 	def send_config_from_file(self, config_file=None, **kwargs):
 		"""
@@ -898,11 +921,11 @@ class SSH(object):
 		The file is processed line-by-line and each command is sent down the
 		SSH channel.
 
-		**kwargs are passed to send_config_set method.
+		**kwargs are passed to send_batch_command method.
 		"""
 		with io.open(config_file, "rt", encoding='utf-8') as cfg_file:
 			
-			return self.send_config_set(cfg_file, **kwargs)
+			return self.send_batch_command(cfg_file, **kwargs)
 			
 			
 		
