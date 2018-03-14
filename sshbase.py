@@ -46,7 +46,7 @@ class SSH(object):
 					use_keys=False, key_file=None, allow_agent=False, ssh_strict=False,
 					system_host_keys=False, alt_host_keys=False, alt_key_file=None, 
 					ssh_config_file=None, timeout=90, session_timeout=60, blocking_timeout=8,
-					keepalive=0, default_enter='\n', response_return='\n'):
+					keepalive=0, default_enter='\n', response_return='\n', **kwargs):
 					
 		"""
 		Initialize attributes for establishing connecton to target device.
@@ -330,7 +330,7 @@ class SSH(object):
 					channel_data += new_data
 			if time.time() - start > timeout:
 				break
-				
+			
 		return channel_data
 		
 	def read_until_prompt(self, *args, **kwargs):
@@ -617,12 +617,12 @@ class SSH(object):
 		"""Read any data available in the channel."""
 		self.read_channel()
 
-	def send_command_timing(self, command_string, delay_factor=1, timeout=None,
+	def send_command_timing(self, command, delay_factor=1, timeout=None,
 							strip_prompt=True, strip_command=True, normalize=True):
-		"""Execute command_string on the SSH channel using a delay-based mechanism. Generally used for show commands.
+		"""Execute command on the SSH channel using a delay-based mechanism. Generally used for show commands.
 
-		:param command_string: The command to be executed on the remote device.
-		:type  command_string: str
+		:param command: The command to be executed on the remote device.
+		:type  command: str
 		:param delay_factor: Multiplying factor used to adjust delays (default: 1).
 		:type  delay_factor: int or float
 		:param timeout: Controls wait time for command excecuting. Will default to self.timeout.
@@ -638,26 +638,26 @@ class SSH(object):
 		delay_factor = self.select_delay_factor(delay_factor)
 		self.clear_buffer()
 		if normalize:
-			command_string = self.normalize_cmd(command_string)
+			command = self.normalize_cmd(command)
 
-		self.write_channel(command_string)
+		self.write_channel(command)
 		output = self._read_channel_timing(delay_factor=delay_factor, timeout=timeout)
 		output = self._sanitize_output(output, strip_command=strip_command,
-									   command_string=command_string, strip_prompt=strip_prompt)
+									   command=command, strip_prompt=strip_prompt)
 		return output		
 		
 		
-	def send_command(self, command_string, expect_string=None,
+	def send_command(self, command, expect_string=None,
 					 delay_factor=1, timeout=None, auto_find_prompt=True,
 					 strip_prompt=True, strip_command=True, normalize=True,
 					 failure_pattern=None):
-		"""Execute command_string on the SSH channel using a pattern-based mechanism. Generally
+		"""Execute command on the SSH channel using a pattern-based mechanism. Generally
 		used for show commands. By default this method will keep waiting to receive data until the
 		network device prompt is detected. The current network device prompt will be determined
 		automatically.
 
-		:param command_string: The command to be executed on the remote device.
-		:type command_string: str
+		:param command: The command to be executed on the remote device.
+		:type command: str
 
 		:param expect_string: Regular expression pattern to use for determining end of output.
 			If left blank will default to being based on router prompt.
@@ -677,6 +677,9 @@ class SSH(object):
 
 		:param normalize: Ensure the proper enter is sent at end of command (default: True).
 		:type normalize: bool
+		
+		:param failure_pattern : Pattern that to check the result of command   
+		:type  failure_pattern : str
 		"""
 		# Time to delay in each read loop
 		loop_delay = .2
@@ -698,11 +701,11 @@ class SSH(object):
 			search_pattern = expect_string
 
 		if normalize:
-			command_string = self.normalize_cmd(command_string)
+			command = self.normalize_cmd(command)
 
 		time.sleep(delay_factor * loop_delay)
 		self.clear_buffer()
-		self.write_channel(command_string)
+		self.write_channel(command)
 		
 		
 		
@@ -745,10 +748,10 @@ class SSH(object):
 
 		#Checkout if the command is ran as expect.
 		if failure_pattern and re.search(failure_pattern, output):
-			raise SSHTimeoutException("Execute command %s failed." % repr(command_string))
+			raise SSHTimeoutException("Execute command %s failed." % repr(command))
 			
 		output = self._sanitize_output(output, strip_command=strip_command,
-									   command_string=command_string, strip_prompt=strip_prompt)
+									   command=command, strip_prompt=strip_prompt)
 		return output
 
 	def send_command_expect(self, *args, **kwargs):
@@ -773,9 +776,9 @@ class SSH(object):
 		backspace_char = '\x08'
 		return output.replace(backspace_char, '')
 
-	def strip_command(self, command_string, output):
+	def strip_command(self, command, output):
 		"""
-		Strip command_string from output string
+		Strip command from output string
 
 		Cisco IOS adds backspaces into output for long commands (i.e. for commands that line wrap)
 		"""
@@ -788,7 +791,7 @@ class SSH(object):
 			new_output = output_lines[1:]
 			return self.RESPONSE_RETURN.join(new_output)
 		else:
-			command_length = len(command_string)
+			command_length = len(command)
 			return output[command_length:]
 
 	def normalize_linefeeds(self, a_string):
@@ -814,7 +817,7 @@ class SSH(object):
 		else:
 			return a_string
 			
-	def _sanitize_output(self, output, strip_command=False, command_string=None, strip_prompt=False):
+	def _sanitize_output(self, output, strip_command=False, command=None, strip_prompt=False):
 		"""
 		Strip out command echo, trailing router prompt and ANSI escape codes.
 
@@ -825,9 +828,9 @@ class SSH(object):
 		:type strip_prompt: bool
 		"""
 		output = self.normalize_linefeeds(output)
-		if strip_command and command_string:
-			command_string = self.normalize_linefeeds(command_string)
-			output = self.strip_command(command_string, output)
+		if strip_command and command:
+			command = self.normalize_linefeeds(command)
+			output = self.strip_command(command, output)
 		if strip_prompt:
 			output = self.strip_prompt(output)
 		return output
@@ -894,12 +897,12 @@ class SSH(object):
 		output = ''
 		if checkout :
 			for cmd in commands:
-				new_output = self.send_command(command_string=self.normalize_cmd(cmd),\
+				new_output = self.send_command(command=self.normalize_cmd(cmd),\
 											   timeout=timeout, failure_pattern=failure_pattern,\
-											   auto_find_prompt = False, strip_prompt=strip_prompt)
+											   auto_find_prompt=False, strip_prompt=strip_prompt)
 				output += new_output
 					
-		else:		
+		else:
 			for cmd in commands:
 				self.write_channel(self.normalize_cmd(cmd))
 				time.sleep(command_interval)
@@ -908,7 +911,7 @@ class SSH(object):
 			if timeout is None:
 				timeout = self.timeout
 			output = self._read_channel_timing(delay_factor=delay_factor, timeout=timeout)
-			
+
 		output = self._sanitize_output(output)
 		
 		return output

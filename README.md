@@ -1,2 +1,2 @@
 # SwitchHandler
-Switch's Handler for Nexus, Huawei, H3C.
+Switch's Handler base on SSH for Nexus, Huawei, H3C.
